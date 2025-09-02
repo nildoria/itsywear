@@ -1,0 +1,179 @@
+/* prevent background page from scrolling when modal is shown */
+html.eppdp-lock, body.eppdp-lock { overflow: hidden !important; }
+
+/* full-screen semi-transparent overlay */
+.employee-popup-overlay {
+  position: fixed;
+  top: 0; left: 0;
+  width: 100%; height: 100%;
+  background: rgba(255,255,255,1);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+}
+/* white dialog */
+.employee-popup-dialog {
+  background: #fff;
+  padding: 1.5rem;
+  border-radius: .5rem;
+  max-width: 420px;
+  width: 92%;
+  box-shadow: 0 4px 20px rgba(0,0,0,.15);
+  position: relative;
+  overflow: visible;
+}
+.employee-popup-dialog h2 { margin: 0 0 .75rem; font-size: 1.25rem; }
+.employee-popup-dialog label { display:block; margin:.5rem 0 .25rem; }
+.employee-popup-dialog select,
+.employee-popup-dialog input {
+  width:100%; padding:.5rem; box-sizing:border-box;
+}
+.employee-popup-dialog .button { margin-top:1rem; width:100%; cursor: pointer; }
+/* 2) Force the Select2 container to fill width, and ensure its dropdown sits on top */
+#eppdp-employee-select + .select2-container {
+  width: 100% !important;
+}
+.select2-container--open .select2-dropdown {
+  z-index: 10000 !important;
+}
+.employee-popup-dialog span.select2-container.select2-container--default.select2-container--open {
+    top: auto !important;
+}
+
+.employee-popup-dialog span.select2-container.select2-container--default.select2-container--open {
+    position: relative !important;
+}
+
+/* 1) Hide the original <select> once Select2 is active */
+.select2-hidden-accessible {
+  visibility: hidden !important;
+  position: absolute !important;
+  height: 0;
+  width: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+/* 2) Make sure the container in your modal is full-width */
+.employee-popup-dialog .select2-container {
+  width: 100% !important;
+}
+
+/* 3) Override any top offsets so the dropdown always appears right under the select */
+.employee-popup-dialog 
+  .select2-container--open          /* when open */
+  .select2-dropdown                 /* the dropdown itself */ {
+  position: absolute !important;
+  top: 100%        !important;       /* flush to bottom of container */
+  left: 0           !important;
+  margin: 0         !important;
+  width: 100%      !important;       /* match the select’s width */
+  z-index: 10000   !important;       /* above your overlay (9999) */
+  box-sizing: border-box;
+}
+
+/* 4) Ensure no ancestor is clipping it */
+.employee-popup-dialog {
+  position: relative;    /* establish positioning context */
+  overflow: visible;     /* allow dropdown to overflow */
+}
+
+
+/* Floating footer banner – now with dropdown + PO input */
+.eppdp-footer-banner {
+    position: fixed;
+    left: 50%;
+    right: auto;
+    bottom: 16px;
+    background: #fff;
+    border: 1px solid #e2e2e2;
+    border-radius: 10px;
+    padding: 10px;
+    z-index: 9;
+    box-shadow: 0 8px 24px rgba(0,0,0,.12);
+    width: 750px;
+    max-width: 100%;
+    transform: translateX(-50%);
+}
+.eppdp-footer-inner {
+  max-width: 100%;
+  margin: 0 auto;
+  padding: .75rem 1rem;
+  display: flex;
+  align-items: center;
+  /* justify-content: center; */
+  gap: .5rem;
+  font-size: 14px;
+}
+.select2-container--open .select2-dropdown { max-height: 50vh; }
+.select2-results__options { max-height: 40vh !important; }
+
+/* .eppdp-footer-inner{display:flex; align-items:center; gap:.5rem; flex-wrap:wrap} */
+
+.eppdp-footer-inner select {
+  min-width: 200px;
+}
+.eppdp-footer-inner input {
+  height: 2em;
+  padding: 0 .5em;
+}
+.eppdp-footer-banner span.select2-container {
+    width: 400px !important;
+    max-width: 400px;
+}
+#eppdp-footer-save-btn {
+    background: #1ba2dc;
+    border: 1px solid #1ba2dc;
+    font-size: 12px;
+    border-radius: 0px;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    color: #ffffff;
+    line-height: 1.2;
+    text-align: center;
+    padding: 12px 15px;
+    outline: none;
+    font-family: inherit;
+    border-radius: 0px;
+    display: flex;
+    flex-direction: row;
+    justify-content: center;
+    cursor: pointer;
+}
+#eppdp-footer-po-input {
+    height: auto;
+    font-size: 14px;
+    border: 1px solid #ccc;
+    background: #ffffff;
+    color: #000000;
+    outline: none;
+    font-family: inherit;
+    padding: 8px 12px;
+    border-radius: 0px;
+    resize: none;
+}
+.eppdp-footer-banner .select2-selection{
+    font-size: 14px;
+    outline: none;
+    padding: 2.5px 8px;
+    resize: none;
+}
+.eppdp-footer-banner .select2-container--default .select2-selection--single .select2-selection__clear {
+    cursor: pointer;
+    float: right;
+    font-weight: bold;
+    height: auto;
+    margin-right: 20px;
+    padding-right: 0px;
+}
+dd.variation-PO {
+    display: inline-block;
+    line-height: 1;
+}
+dd.variation-PO p {
+    margin: 0;
+}
+.xoo-wsc-product dd.variation-PO p {
+    margin-top: 4px !important;
+}
