@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Itsy Tolkit
  * Description: Merged: preserves legacy behavior and adds Employee/PO gate, per-employee saved lists, and load & checkout.
- * Version:     1.1.3
+ * Version:     1.1.5
  * Author:      KickAss Online
  * Text Domain: eppdp
  */
@@ -142,8 +142,9 @@ final class EPPDP_Plugin
     }
     protected function has_selection(): bool
     {
-        return (bool) WC()->session->get('eppdp_employee_id');
+        return (eppdp_get_employee_from_session() !== '');
     }
+
 
     /* ---------- Assets & UI ---------- */
     public function assets()
@@ -941,6 +942,7 @@ require_once EPPDP_PATH . 'includes/employees-data.php';
 add_action('plugins_loaded', function () {
     if (class_exists('WooCommerce')) {
         require_once EPPDP_PATH . 'includes/frontend/orders-filters.php';
+        require_once EPPDP_PATH . 'includes/frontend/cart-persistence.php';
         require_once EPPDP_PATH . 'includes/employees-manager.php';
         require_once EPPDP_PATH . 'includes/legacy-compat.php';
         require_once EPPDP_PATH . 'includes/checkout-legacy.php';
