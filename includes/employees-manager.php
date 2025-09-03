@@ -22,6 +22,15 @@ defined('ABSPATH') || exit;
  * ------------------------------------------------------------
  */
 
+function eppdp_sanitize_empcode($raw)
+{
+  $v = sanitize_text_field($raw);
+  // Allow numbers, letters, dash, underscore, and keep leading zeros (e.g., "02")
+  $v = preg_replace('/[^A-Za-z0-9_\-]/', '', $v ?? '');
+  return $v;
+}
+
+
 /** 1) Add "Employees" before Logout (keeps your "Shop Now" entry too) */
 add_filter('woocommerce_account_menu_items', function ($items) {
     $new = [];
@@ -127,6 +136,9 @@ add_action('woocommerce_account_employee_endpoint', function () {
             #eppdp-edit-emp input, #eppdp-edit-emp select {
                 width: 95%;
             }
+            button.button {
+                cursor: pointer;
+            }
         </style>
 
         <div class="employee-wrapper">
@@ -140,8 +152,15 @@ add_action('woocommerce_account_employee_endpoint', function () {
               <form id="eppdp-add-emp" class="eppdp-grid2">
                 <div class="eppdp-field">
                   <label for="eppdp-emp-name"><?php esc_html_e('Name', 'woocommerce'); ?></label>
-                  <input type="text" id="eppdp-emp-name" required class="input-text">
+                  <input type="text" id="eppdp-emp-name" required class="input-text"placeholder="<?php esc_attr_e('John Wick', 'woocommerce'); ?>">
                 </div>
+
+                <div class="eppdp-field">
+                  <label for="eppdp-emp-code"><?php esc_html_e('Employee ID (optional)', 'woocommerce'); ?></label>
+                  <input type="text" id="eppdp-emp-code" class="input-text"
+                    placeholder="<?php esc_attr_e('e.g. 01 or EMP-001', 'woocommerce'); ?>">
+                </div>
+
                 <div class="eppdp-field">
                   <label for="eppdp-emp-dept"><?php esc_html_e('Department', 'woocommerce'); ?></label>
                   <select id="eppdp-emp-dept" required class="input-select">
@@ -170,6 +189,7 @@ add_action('woocommerce_account_employee_endpoint', function () {
                 <thead>
                   <tr>
                     <th><?php esc_html_e('Name', 'woocommerce'); ?></th>
+                    <th><?php esc_html_e('ID', 'woocommerce'); ?></th>
                     <th><?php esc_html_e('Department', 'woocommerce'); ?></th>
                     <th><?php esc_html_e('Branch', 'woocommerce'); ?></th>
                     <th><?php esc_html_e('Actions', 'woocommerce'); ?></th>
@@ -179,6 +199,7 @@ add_action('woocommerce_account_employee_endpoint', function () {
                   <?php foreach ($employees as $idx => $e): ?>
                         <tr data-id="<?php echo esc_attr($idx); ?>">
                           <td><?php echo esc_html($e['name'] ?? ''); ?></td>
+                          <td><?php echo esc_html($e['code'] ?? ''); ?></td>
                           <td><?php echo esc_html($e['department'] ?? ''); ?></td>
                           <td><?php echo esc_html($e['branch'] ?? ''); ?></td>
                           <td>
@@ -301,6 +322,13 @@ add_action('woocommerce_account_employee_endpoint', function () {
                 <label for="eppdp-edit-name"><?php esc_html_e('Name', 'woocommerce'); ?></label>
                 <input type="text" id="eppdp-edit-name" required class="input-text">
               </div>
+
+              <div class="eppdp-field">
+                <label for="eppdp-edit-code"><?php esc_html_e('Employee ID (optional)', 'woocommerce'); ?></label>
+                <input type="text" id="eppdp-edit-code" class="input-text"
+                  placeholder="<?php esc_attr_e('e.g. 01 or EMP-001', 'woocommerce'); ?>">
+              </div>
+
               <div class="eppdp-field">
                 <label for="eppdp-edit-dept"><?php esc_html_e('Department', 'woocommerce'); ?></label>
                 <select id="eppdp-edit-dept" required class="input-select">
@@ -353,6 +381,7 @@ add_action('woocommerce_account_employee_endpoint', function () {
                 $tb.append(
                   '<tr data-id="'+i+'">'+
                     '<td>'+ $('<div>').text(e.name||'').html() +'</td>'+
+                    '<td>'+ $('<div>').text(e.code||'').html() +'</td>'+
                     '<td>'+ $('<div>').text(e.department||'').html() +'</td>'+
                     '<td>'+ $('<div>').text(e.branch||'').html() +'</td>'+
                     '<td>'+
@@ -420,16 +449,21 @@ add_action('woocommerce_account_employee_endpoint', function () {
               var data = {
                 action:'eppdp_add_employee', nonce:nonceMgmt,
                 employee_name:  $('#eppdp-emp-name').val(),
+                employee_code:       $('#eppdp-emp-code').val(),
                 employee_department: $('#eppdp-emp-dept').val(),
                 employee_branch:     $('#eppdp-emp-branch').val()
               };
               $.post(ajax, data, function(res){
-                if(res.success){
+                if(res && res.success){
                   rebuildTable(res.data.employees);
                   $('#eppdp-add-emp')[0].reset();
                   msg('<?php echo esc_js(__('Employee added', 'woocommerce')); ?>');
-                } else { msg('Error', true); }
+                } else {
+                  var err = (res && res.data && res.data.message) ? res.data.message : 'Error';
+                  msg(err, true);
+                }
               });
+
             });
             $(document).on('click','.delete-emp', function(){
               $.post(ajax, {action:'eppdp_delete_employee', nonce:nonceMgmt, employee_id:$(this).data('id')}, function(res){
@@ -443,8 +477,9 @@ add_action('woocommerce_account_employee_endpoint', function () {
               var id = $(this).data('id'), $row = $('tr[data-id="'+id+'"]');
               $('#eppdp-edit-id').val(id);
               $('#eppdp-edit-name').val($row.find('td').eq(0).text());
-              $('#eppdp-edit-dept').val($row.find('td').eq(1).text());
-              $('#eppdp-edit-branch').val($row.find('td').eq(2).text());
+              $('#eppdp-edit-code').val($row.find('td').eq(1).text());
+              $('#eppdp-edit-dept').val($row.find('td').eq(2).text());
+              $('#eppdp-edit-branch').val($row.find('td').eq(3).text());
               $('#eppdp-edit-modal').css('display','flex');
             });
             $('#eppdp-cancel-edit').on('click', function(){ $('#eppdp-edit-modal').hide(); });
@@ -454,6 +489,7 @@ add_action('woocommerce_account_employee_endpoint', function () {
                 action:'eppdp_edit_employee', nonce:nonceMgmt,
                 employee_id: $('#eppdp-edit-id').val(),
                 employee_name: $('#eppdp-edit-name').val(),
+                employee_code: $('#eppdp-edit-code').val(),
                 employee_department: $('#eppdp-edit-dept').val(),
                 employee_branch: $('#eppdp-edit-branch').val()
               };
@@ -573,6 +609,7 @@ add_action('wp_ajax_eppdp_add_employee', function () {
     $uid = get_current_user_id();
     $emp = [
         'name' => sanitize_text_field($_POST['employee_name'] ?? ''),
+        'code' => eppdp_sanitize_empcode($_POST['employee_code'] ?? ''),
         'department' => sanitize_text_field($_POST['employee_department'] ?? ''),
         'branch' => sanitize_text_field($_POST['employee_branch'] ?? ''),
     ];
@@ -580,6 +617,16 @@ add_action('wp_ajax_eppdp_add_employee', function () {
         wp_send_json_error(['message' => 'Missing fields']);
     $list = get_user_meta($uid, 'employees', true);
     $list = is_array($list) ? $list : [];
+
+    // prevent duplicate *codes* if you want uniqueness (skip if not desired)
+    if ($emp['code'] !== '') {
+        foreach ($list as $e) {
+            if (is_array($e) && !empty($e['code']) && strcasecmp($e['code'], $emp['code']) === 0) {
+                wp_send_json_error(['message' => 'Employee code already exists.']);
+            }
+        }
+    }
+
     $list[] = $emp;
     update_user_meta($uid, 'employees', $list);
     wp_send_json_success(['employees' => $list]);
@@ -602,22 +649,43 @@ add_action('wp_ajax_eppdp_delete_employee', function () {
 });
 
 add_action('wp_ajax_eppdp_edit_employee', function () {
-    check_ajax_referer('eppdp_emp_mgmt', 'nonce');
-    $uid = get_current_user_id();
-    $id = intval($_POST['employee_id'] ?? -1);
-    $emp = [
-        'name' => sanitize_text_field($_POST['employee_name'] ?? ''),
-        'department' => sanitize_text_field($_POST['employee_department'] ?? ''),
-        'branch' => sanitize_text_field($_POST['employee_branch'] ?? ''),
-    ];
-    $list = get_user_meta($uid, 'employees', true);
-    $list = is_array($list) ? $list : [];
-    if (!isset($list[$id]))
-        wp_send_json_error(['message' => 'Employee not found']);
-    $list[$id] = $emp;
-    update_user_meta($uid, 'employees', $list);
-    wp_send_json_success(['employees' => $list]);
+  check_ajax_referer('eppdp_emp_mgmt', 'nonce');
+  $uid = get_current_user_id();
+  $idx = intval($_POST['employee_id'] ?? -1);
+
+  $new = [
+    'name' => sanitize_text_field($_POST['employee_name'] ?? ''),
+    'code' => eppdp_sanitize_empcode($_POST['employee_code'] ?? ''),
+    'department' => sanitize_text_field($_POST['employee_department'] ?? ''),
+    'branch' => sanitize_text_field($_POST['employee_branch'] ?? ''),
+  ];
+
+  $list = get_user_meta($uid, 'employees', true);
+  $list = is_array($list) ? $list : [];
+
+  if (!isset($list[$idx])) {
+    wp_send_json_error(['message' => 'Employee not found']);
+  }
+
+  // enforce unique codes across others
+  if ($new['code'] !== '') {
+      foreach ($list as $i => $e) {
+          if ($i === $idx) continue;
+          if (is_array($e) && !empty($e['code']) && strcasecmp($e['code'], $new['code']) === 0) {
+              wp_send_json_error(['message' => 'Employee code already exists.']);
+          }
+      }
+  }
+
+  $list[$idx] = array_merge(
+    ['code' => '', 'name' => '', 'department' => '', 'branch' => ''],
+    $new
+  );
+
+  update_user_meta($uid, 'employees', $list);
+  wp_send_json_success(['employees' => $list]);
 });
+
 
 /** 5) Import/Export (one set only) */
 if (!function_exists('eppdp_title_case')) {

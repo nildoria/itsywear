@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Itsy Tolkit
  * Description: Merged: preserves legacy behavior and adds Employee/PO gate, per-employee saved lists, and load & checkout.
- * Version:     1.1.5
+ * Version:     1.1.6
  * Author:      KickAss Online
  * Text Domain: eppdp
  */

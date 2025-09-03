@@ -16,17 +16,49 @@ const EPPDP_EMP_COOKIE = 'eppdp_emp';                 // last selected employee 
 const EPPDP_CART_COOKIE_DAYS = 7;                           // cookie lifetime (UI convenience)
 const EPPDP_TTL_SECONDS = 7 * DAY_IN_SECONDS;          // expiration window for saved carts
 
-// Prevent saving while we empty/restore internally
+// --- Save/restore guard to avoid overwriting with empty during our own mutations
 function eppdp_suspend_save(bool $on = true): void
 {
-    if (WC()->session) {
+    if (WC()->session)
         WC()->session->set('eppdp_no_save', $on ? 1 : 0);
-    }
 }
 function eppdp_is_save_suspended(): bool
 {
     return WC()->session ? (bool) WC()->session->get('eppdp_no_save', 0) : false;
 }
+
+// --- Deterministic hash of cart items (product, variation, qty, variation attrs)
+function eppdp_calc_items_hash(array $items): string
+{
+    $norm = [];
+    foreach ($items as $r) {
+        $va = is_array($r['variation'] ?? null) ? $r['variation'] : [];
+        ksort($va);
+        $norm[] = [
+            'p' => (int) ($r['product_id'] ?? 0),
+            'v' => (int) ($r['variation_id'] ?? 0),
+            'q' => (float) ($r['qty'] ?? 1),
+            'a' => $va,
+        ];
+    }
+    usort($norm, function ($a, $b) {
+        if ($a['p'] !== $b['p'])
+            return $a['p'] <=> $b['p'];
+        if ($a['v'] !== $b['v'])
+            return $a['v'] <=> $b['v'];
+        if ($a['q'] !== $b['q'])
+            return $a['q'] <=> $b['q'];
+        return strcmp(wp_json_encode($a['a']), wp_json_encode($b['a']));
+    });
+    return md5(wp_json_encode($norm));
+}
+
+// Current WC cart hash (uses the same export format)
+function eppdp_current_cart_hash(): string
+{
+    return eppdp_calc_items_hash(eppdp_export_wc_cart_snapshot());
+}
+
 
 /**
  * Employee from session ONLY (authoritative for cart behavior).
@@ -75,9 +107,9 @@ function eppdp_gate_cart_until_employee(): void
         return;
     $emp = eppdp_get_employee_from_session();
     if ($emp === '') {
-        eppdp_suspend_save(true);       // ⬅️ block saver
-        WC()->cart->empty_cart();       // keeps cart empty until user selects
-        eppdp_suspend_save(false);      // ⬅️ unblock saver
+        eppdp_suspend_save(true);
+        WC()->cart->empty_cart();          // keep cart empty until employee picked
+        eppdp_suspend_save(false);
     }
 }
 add_action('woocommerce_cart_loaded_from_session', 'eppdp_gate_cart_until_employee', 5);
@@ -174,10 +206,10 @@ function eppdp_load_snapshot_into_cart(array $snapshot): void
     if (!WC()->cart)
         return;
 
-    eppdp_suspend_save(true);          // ⬅️ block saver during our mutation
+    eppdp_suspend_save(true);
 
     WC()->cart->empty_cart();
-    foreach (($snapshot['items'] ?? []) as $row) {
+    foreach ((array) ($snapshot['items'] ?? []) as $row) {
         $pid = (int) ($row['product_id'] ?? 0);
         $vid = (int) ($row['variation_id'] ?? 0);
         $qty = max(0.001, (float) ($row['qty'] ?? 1));
@@ -189,8 +221,9 @@ function eppdp_load_snapshot_into_cart(array $snapshot): void
     }
     WC()->cart->calculate_totals();
 
-    eppdp_suspend_save(false);         // ⬅️ re-enable saver
-    eppdp_save_current_employee_cart();// ⬅️ persist the restored snapshot to meta
+    eppdp_suspend_save(false);
+    // Persist the restored state exactly once (so later page views are no-ops)
+    eppdp_save_current_employee_cart();
 }
 
 
@@ -204,7 +237,7 @@ function eppdp_save_current_employee_cart(): void
     if (!is_user_logged_in() || !WC()->cart)
         return;
     if (eppdp_is_save_suspended())
-        return;   // ⬅️ don't overwrite during restore/gate
+        return;
 
     $emp = eppdp_get_employee_from_session(); // session-only
     if ($emp === '')
@@ -212,9 +245,11 @@ function eppdp_save_current_employee_cart(): void
 
     $uid = get_current_user_id();
     $data = eppdp_prune_expired_carts(eppdp_get_all_saved_carts($uid));
+    $items = eppdp_export_wc_cart_snapshot();
 
     $data['carts'][$emp] = [
-        'items' => eppdp_export_wc_cart_snapshot(),
+        'items' => $items,
+        'hash' => eppdp_calc_items_hash($items),
         'modified' => time(),
     ];
     eppdp_put_all_saved_carts($uid, $data);
@@ -231,18 +266,27 @@ function eppdp_maybe_restore_employee_cart(): void
     if (!is_user_logged_in() || !WC()->cart)
         return;
 
-    // Only trust SESSION for cart restore (cookie is UI-only)
     $emp = eppdp_get_employee_from_session();
     if ($emp === '')
         return;
 
     $uid = get_current_user_id();
     $data = eppdp_prune_expired_carts(eppdp_get_all_saved_carts($uid));
-    if (empty($data['carts'][$emp]))
+    $entry = $data['carts'][$emp] ?? null;
+    if (!$entry)
         return;
 
-    eppdp_load_snapshot_into_cart((array) $data['carts'][$emp]);
+    $saved_hash = (string) ($entry['hash'] ?? eppdp_calc_items_hash((array) ($entry['items'] ?? [])));
+    $current_hash = eppdp_current_cart_hash();
+
+    // ⬅️ Idempotent: do nothing if cart already matches snapshot
+    if ($current_hash === $saved_hash) {
+        return;
+    }
+
+    eppdp_load_snapshot_into_cart($entry); // entry contains ['items', 'hash', 'modified']
 }
+add_action('woocommerce_cart_loaded_from_session', 'eppdp_maybe_restore_employee_cart', 1000);
 
 
 /**
