@@ -47,13 +47,19 @@ add_filter('eppdp_employees_for_user', function ($_, $user_id) {
                 trim(($emp['branch'] ?? ''))
             ), 0, 12);
             $name = $emp['name'] ?? $emp['display_name'] ?? $id;
+            $code = isset($emp['code']) ? (string) $emp['code'] : '';
         } else {
             $name = (string) $emp;
             $id = sanitize_title($name) ?: ('emp_' . ($idx + 1));
+            $code = '';
         }
 
         if ($id) {
-            $out[] = ['id' => (string) $id, 'name' => (string) $name];
+            $out[] = [
+                'id' => (string) $id,     // internal identifier (unchanged)
+                'name' => (string) $name,   // display name
+                'code' => (string) $code,   // NEW: visual employee code, optional
+            ];
         }
     }
 

@@ -88,6 +88,9 @@ final class EPPDP_Plugin
         add_filter('woocommerce_checkout_get_value', [$this, 'force_checkout_values'], 20, 2);
         add_filter('woocommerce_checkout_posted_data', [$this, 'force_posted_values'], 20);
 
+        // After your other add_action(...) lines:
+        add_action('woocommerce_checkout_create_order', [$this, 'backfill_billing_from_profile'], 50, 2);
+
         // Update Billing Details Title
         add_filter('gettext', [$this, 'filter_wc_checkout_headings'], 20, 3);
 
@@ -143,6 +146,45 @@ final class EPPDP_Plugin
     protected function has_selection(): bool
     {
         return (eppdp_get_employee_from_session() !== '');
+    }
+
+    private function get_employee_item_counts_persisted(): array
+    {
+        if (!is_user_logged_in())
+            return [];
+
+        $uid = get_current_user_id();
+        // uses your persistence utils
+        if (!function_exists('eppdp_get_all_saved_carts'))
+            return [];
+
+        // prune expired so we don't show stale counts
+        $data = eppdp_prune_expired_carts(eppdp_get_all_saved_carts($uid));
+        $carts = isset($data['carts']) && is_array($data['carts']) ? $data['carts'] : [];
+        $counts = [];
+
+        foreach ($carts as $emp_id => $entry) {
+            $qty = 0;
+            foreach ((array) ($entry['items'] ?? []) as $row) {
+                $qty += (float) ($row['qty'] ?? 0);
+            }
+            $counts[(string) $emp_id] = (int) $qty;
+        }
+
+        // For the *current* employee, prefer the live cart (so the number updates immediately)
+        $sel = $this->get_selection();
+        $cur = isset($sel['id']) ? (string) $sel['id'] : '';
+        if ($cur && WC()->cart) {
+            $live = 0;
+            foreach (WC()->cart->get_cart() as $ci) {
+                if (($ci['eppdp_employee_id'] ?? '') === $cur) {
+                    $live += (int) ($ci['quantity'] ?? 0);
+                }
+            }
+            $counts[$cur] = $live; // override persisted for the current employee
+        }
+
+        return $counts;
     }
 
 
@@ -227,6 +269,7 @@ final class EPPDP_Plugin
             return;
         }
         $employees = $this->get_employees_for_user(get_current_user_id());
+        $counts = $this->get_employee_item_counts_persisted();
         $has = $this->has_selection();
         ?>
         <div id="eppdp-modal" class="employee-popup-overlay" style="<?php echo $has ? 'display:none' : 'display:flex'; ?>">
@@ -236,11 +279,18 @@ final class EPPDP_Plugin
                 <label for="eppdp-employee-select"><?php esc_html_e('Employee', 'eppdp'); ?></label>
                 <select id="eppdp-employee-select">
                     <option value=""><?php esc_html_e('— Choose —', 'eppdp'); ?></option>
-                    <?php foreach ($employees as $emp): ?>
-                        <option value="<?php echo esc_attr($emp['id']); ?>">
-                            <?php //echo esc_html($emp['name'] . ' (' . $emp['id'] . ')'); ?>
-                            <?php echo esc_html($emp['name']); ?>
-                        </option>
+                      <?php foreach ($employees as $e):
+                          $raw_id = (string) $e['id'];
+                          $id = esc_attr($raw_id);
+                          $name = esc_html($e['name']);
+                          $code = isset($e['code']) ? esc_attr($e['code']) : '';
+                          $count = (int) ($counts[$raw_id] ?? 0);
+                          ?>
+                        <option
+                        value="<?php echo esc_attr($id); ?>"
+                        <?php if ($code !== ''): ?>data-code="<?php echo esc_attr($code); ?>"<?php endif; ?>
+                        <?php if ($count > 0): ?>data-count="<?php echo (int)$count; ?>"<?php endif; ?>
+                        ><?php echo esc_html($name); ?></option>
                     <?php endforeach; ?>
                 </select>
 
@@ -337,6 +387,7 @@ final class EPPDP_Plugin
         // grab current selection + full employee list
         $sel = $this->get_selection();
         $employees = $this->get_employees_for_user(get_current_user_id());
+        $counts = $this->get_employee_item_counts_persisted();
         ?>
         <div class="eppdp-footer-banner">
             <div class="eppdp-footer-inner">
@@ -344,10 +395,17 @@ final class EPPDP_Plugin
                     class="screen-reader-text"><?php esc_html_e('Employee', 'eppdp'); ?></label>
                 <select id="eppdp-footer-employee-select" style="min-width:200px;">
                     <option value=""><?php esc_html_e('— Choose Employee —', 'eppdp'); ?></option>
-                    <?php foreach ($employees as $emp): ?>
-                        <option value="<?php echo esc_attr($emp['id']); ?>" <?php selected($sel['id'], $emp['id']); ?>>
-                            <?php echo esc_html($emp['name']); ?>
-                        </option>
+
+                    <?php foreach ($employees as $e):
+                        $id = esc_attr($e['id']);
+                        $name = esc_html($e['name']);
+                        $code = isset($e['code']) ? esc_attr($e['code']) : '';
+                        ?>
+                    <option value="<?php echo $id; ?>" data-code="<?php echo $code; ?>"
+                        data-count="<?php echo (int) ($counts[$e['id']] ?? 0); ?>">
+                        <?php echo $name; ?>
+                    </option>
+
                     <?php endforeach; ?>
                 </select>
 
@@ -371,13 +429,26 @@ final class EPPDP_Plugin
                 var $fsel = $('#eppdp-footer-employee-select');
 
                 if ($.fn.select2 && !$fsel.hasClass('select2-hidden-accessible')) {
-                    $fsel.select2({
-                        placeholder: 'Search employee…',
-                        allowClear: true,
-                        width: 'resolve',
-                        dropdownAutoWidth: true
-                    });
+                var matcher   = (window.eppdpHelpers && eppdpHelpers.empMatcher) ? eppdpHelpers.empMatcher : empMatcher;
+                var templater = (window.eppdpHelpers && eppdpHelpers.withCodeAndCountMarkup) ? eppdpHelpers.withCodeAndCountMarkup : withCodeAndCountMarkup;
+
+                $fsel.select2({
+                    placeholder: (eppdpData && eppdpData.i18nEmployeePlaceholder) ? eppdpData.i18nEmployeePlaceholder : "Search employee…",
+                    allowClear: true,
+                    width: 'resolve',
+                    matcher: matcher,
+                    templateResult: templater,
+                    templateSelection: templater,
+                    dropdownAutoWidth: true
+                });
                 }
+
+                // Make sure the selected employee shows after reload
+                var currentId = <?php echo json_encode($sel['id']); ?>;
+                if (currentId) {
+                $fsel.val(currentId).trigger('change.select2');
+                }
+
 
                 function positionFooterSelect2() {
                     var $dd = $('.select2-container--open .select2-dropdown');
@@ -471,6 +542,37 @@ final class EPPDP_Plugin
                         location.reload();
                     });
                 });
+
+                // if (!$fsel.length) return;
+
+                // function empMatcher(params, data) {
+                // if ($.trim(params.term) === "") return data;
+                // if (typeof data.text === "undefined") return null;
+
+                // var term = params.term.toString().toLowerCase();
+                // var text = (data.text || "").toString().toLowerCase();
+
+                // // use attr + trim (jQuery .data() can cache/keep whitespace)
+                // var raw  = $(data.element).attr("data-code");
+                // var code = raw ? String(raw).toLowerCase().trim() : "";
+
+                // if (text.indexOf(term) > -1 || (code && code.indexOf(term) > -1)) {
+                //     return data;
+                // }
+                // return null;
+                // }
+
+                // function withCodeMarkup(data) {
+                // if (!data.element) return data.text;
+                // var code = (($(data.element).attr("data-code")) || "").toString().trim();
+                // if (!code) return data.text;             // ← no parentheses if empty
+                // return $(
+                //     "<span>" + data.text +
+                //     ' <em style="opacity:.7;">(' + code + ")</em></span>"
+                // );
+                // }
+
+
             });
         </script>
         <?php
@@ -882,6 +984,105 @@ final class EPPDP_Plugin
         return $data;
     }
 
+    /**
+     * Backfill order billing (and shipping) from the logged-in user's saved
+     * address book so order details / invoices are complete even when the
+     * checkout form doesn't expose those fields.
+     */
+    public function backfill_billing_from_profile($order, $data)
+    {
+        if (!is_user_logged_in()) {
+            return;
+        }
+
+        $uid = get_current_user_id();
+        $customer = new WC_Customer($uid);
+
+        // Helpers
+        $get_user_field = function ($which, $field) use ($customer, $uid) {
+            $m = "get_{$which}_{$field}";
+            if (is_callable([$customer, $m])) {
+                $val = (string) $customer->$m();
+            } else {
+                $val = (string) get_user_meta($uid, "{$which}_{$field}", true);
+            }
+            return $val;
+        };
+        $set_order_field = function ($which, $field, $val) use ($order) {
+            if ($val === '')
+                return;
+            $m = "set_{$which}_{$field}";
+            if (is_callable([$order, $m])) {
+                $order->$m($val);
+            } else {
+                // Fallback for older WC
+                $order->update_meta_data("_{$which}_{$field}", $val);
+            }
+        };
+
+        // Billing fields to copy over
+        $billing_fields = [
+            'first_name',
+            'last_name',
+            'company',
+            'address_1',
+            'address_2',
+            'city',
+            'state',
+            'postcode',
+            'country',
+            'phone',
+            'email'
+        ];
+
+        foreach ($billing_fields as $f) {
+            $getm = "get_billing_{$f}";
+            $current = is_callable([$order, $getm]) ? (string) $order->$getm() : (string) $order->get_meta("_billing_{$f}");
+            if ($current !== '') {
+                continue; // already set by something else
+            }
+
+            $val = $get_user_field('billing', $f);
+
+            // ensure we always have an email
+            if ($f === 'email' && $val === '') {
+                $u = get_userdata($uid);
+                $val = $u ? (string) $u->user_email : '';
+            }
+
+            $set_order_field('billing', $f, $val);
+        }
+
+        // Optional: also populate shipping if needed (handy for invoices/packing slips)
+        // Will prefer saved shipping; if missing, falls back to billing.
+        $shipping_fields = [
+            'first_name',
+            'last_name',
+            'company',
+            'address_1',
+            'address_2',
+            'city',
+            'state',
+            'postcode',
+            'country',
+            'phone'
+        ];
+
+        foreach ($shipping_fields as $f) {
+            $getm = "get_shipping_{$f}";
+            $current = is_callable([$order, $getm]) ? (string) $order->$getm() : (string) $order->get_meta("_shipping_{$f}");
+            if ($current !== '') {
+                continue;
+            }
+
+            $val = $get_user_field('shipping', $f);
+            if ($val === '') {
+                $val = $get_user_field('billing', $f); // fallback
+            }
+
+            $set_order_field('shipping', $f, $val);
+        }
+    }
 
 
     /**
@@ -946,6 +1147,7 @@ add_action('plugins_loaded', function () {
         require_once EPPDP_PATH . 'includes/employees-manager.php';
         require_once EPPDP_PATH . 'includes/legacy-compat.php';
         require_once EPPDP_PATH . 'includes/checkout-legacy.php';
+        require_once EPPDP_PATH . 'includes/open-orders.php';
     }
 }, 20);
 

@@ -44,7 +44,9 @@ html.eppdp-lock, body.eppdp-lock { overflow: hidden !important; }
 .employee-popup-dialog span.select2-container.select2-container--default.select2-container--open {
     position: relative !important;
 }
-
+.select2-search--dropdown {
+    padding: 4px !important;
+}
 /* 1) Hide the original <select> once Select2 is active */
 .select2-hidden-accessible {
   visibility: hidden !important;
@@ -176,4 +178,36 @@ dd.variation-PO p {
 }
 .xoo-wsc-product dd.variation-PO p {
     margin-top: 4px !important;
+}
+/* Select2 option row */
+.select2-results__option .eppdp-optwrap{
+  position: relative;
+  display: inline-block;
+  min-width: 100%;
+}
+.eppdp-code{
+  opacity: .7;
+  font-style: normal;
+  margin-left: .25em;
+}
+.eppdp-badge{
+  position: absolute;
+  right: 6px;
+  top: 4px;               /* "right-top" in dropdown list */
+  display: inline-block;
+  min-width: 1.4em;
+  padding: 0 .35em;
+  border-radius: 999px;
+  background: #111;
+  color: #fff;
+  font-size: 11px;
+  line-height: 1.4;
+  text-align: center;
+}
+
+/* When the selection is collapsed (inside the closed select), don't absolutely position */
+.select2-selection__rendered .eppdp-badge{
+  position: absolute;
+  top: auto; right: auto;
+  margin-left: .4em;
 }
