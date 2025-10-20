@@ -813,37 +813,3 @@ add_action('wp_ajax_eppdp_import_employees', function () {
 
     wp_send_json_success(['count' => count($rows), 'total' => count($employees)]);
 });
-
-
-add_action('wp_ajax_save_employee_po', 'eppdp_ajax_save_employee_po');
-
-function eppdp_ajax_save_employee_po()
-{
-  check_ajax_referer('eppdp_nonce', 'nonce');
-  if (!is_user_logged_in()) {
-    wp_send_json_error('You must be logged in.');
-  }
-
-  $emp = isset($_POST['employee']) ? sanitize_text_field(wp_unslash($_POST['employee'])) : '';
-  $po = isset($_POST['po']) ? sanitize_text_field(wp_unslash($_POST['po'])) : '';
-  if ($emp === '') {
-    wp_send_json_error('Please choose an employee.');
-  }
-
-  eppdp_set_selected_employee_id($emp);
-  if (WC()->session) {
-    WC()->session->set('eppdp_po', $po);
-  }
-
-  // 🔑 Make sure the Woo cart exists in admin-ajax.php
-  if (function_exists('wc_load_cart')) {
-    wc_load_cart();
-  }
-
-  // Hydrate the cart immediately from saved snapshot (if any)
-  if (WC()->cart) {
-    eppdp_maybe_restore_employee_cart();
-  }
-
-  wp_send_json_success(['employee' => $emp, 'po' => $po]);
-}

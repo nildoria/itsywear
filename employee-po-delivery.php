@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Itsy Tolkit
  * Description: Merged: preserves legacy behavior and adds Employee/PO gate, per-employee saved lists, and load & checkout.
- * Version:     1.1.6
+ * Version:     1.2.0
  * Author:      KickAss Online
  * Text Domain: eppdp
  */
@@ -10,7 +10,7 @@
 if (!defined('ABSPATH'))
     exit;
 
-define('EPPDP_VERSION', '1.1.3');
+define('EPPDP_VERSION', '1.1.8');
 define('EPPDP_PATH', plugin_dir_path(__FILE__));
 define('EPPDP_URL', plugin_dir_url(__FILE__));
 
@@ -37,7 +37,7 @@ final class EPPDP_Plugin
 
         // Frontend UX
         add_action('wp_enqueue_scripts', [$this, 'assets']);
-        add_action('wp_footer', [$this, 'render_modal']);
+        add_action('wp_body_open', [$this, 'render_modal']);
         add_action('woocommerce_before_main_content', [$this, 'shop_banner'], 15);
 
         // Checkout field
@@ -83,7 +83,7 @@ final class EPPDP_Plugin
         add_action('wp_ajax_nopriv_eppdp_clear_selection', [$this, 'ajax_noauth']);
 
         // Copy cart meta → order items
-        add_action('woocommerce_checkout_create_order_line_item', [$this, 'order_item_meta'], 10, 4);
+        // add_action('woocommerce_checkout_create_order_line_item', [$this, 'order_item_meta'], 10, 4);
 
         add_filter('woocommerce_checkout_get_value', [$this, 'force_checkout_values'], 20, 2);
         add_filter('woocommerce_checkout_posted_data', [$this, 'force_posted_values'], 20);
@@ -129,24 +129,52 @@ final class EPPDP_Plugin
     }
 
     /* ---------- Session helpers ---------- */
-    protected function set_selection($employee_id, $employee_name, $po)
-    {
-        WC()->session->set('eppdp_employee_id', $employee_id);
-        WC()->session->set('eppdp_employee_name', $employee_name);
+    private function set_selection($emp_id, $emp_name, $po = '') {
+        WC()->session->set('eppdp_employee_id', $emp_id);
+        WC()->session->set('eppdp_employee_name', $emp_name);
         WC()->session->set('eppdp_po', $po);
     }
-    protected function get_selection(): array
-    {
-        return [
-            'id' => WC()->session->get('eppdp_employee_id'),
-            'name' => WC()->session->get('eppdp_employee_name'),
-            'po' => WC()->session->get('eppdp_po'),
-        ];
-    }
+
     protected function has_selection(): bool
     {
-        return (eppdp_get_employee_from_session() !== '');
+        if (function_exists('WC') && WC()->session) {
+            $id = (string) WC()->session->get('eppdp_employee_id', '');
+            if ($id === '') {
+                // legacy mirror some code still sets
+                $id = (string) WC()->session->get('selected_employee', '');
+            }
+            return $id !== '';
+        }
+        return false;
     }
+
+
+    protected function get_selection(): array
+    {
+        $id   = '';
+        $name = '';
+        $po   = '';
+
+        if (function_exists('WC') && WC()->session) {
+            $id   = (string) WC()->session->get('eppdp_employee_id', '');
+            $name = (string) WC()->session->get('eppdp_employee_name', '');
+            $po   = (string) WC()->session->get('eppdp_po', '');
+        }
+
+        // If name missing but we have an id, resolve from the user’s employees (for banners/labels)
+        if ($name === '' && $id !== '' && is_user_logged_in()) {
+            $uid = get_current_user_id();
+            foreach ($this->get_employees_for_user($uid) as $emp) {
+                if ((string) $emp['id'] === $id) {
+                    $name = (string) ($emp['name'] ?? $id);
+                    break;
+                }
+            }
+        }
+
+        return ['id' => $id, 'name' => $name, 'po' => $po];
+    }
+
 
     private function get_employee_item_counts_persisted(): array
     {
@@ -191,9 +219,15 @@ final class EPPDP_Plugin
     /* ---------- Assets & UI ---------- */
     public function assets()
     {
-        if (!(is_shop() || is_post_type_archive('product') || is_product_taxonomy() || (function_exists('is_checkout') && is_checkout() && !is_order_received_page()))) {
+        if (!( is_shop()
+            || is_product()
+            || is_post_type_archive('product')
+            || is_product_taxonomy()
+            || (function_exists('is_checkout') && is_checkout() && !is_order_received_page())
+        )) {
             return;
         }
+
 
         wp_enqueue_style('eppdp-modal', EPPDP_URL . 'assets/css/modal.css', [], EPPDP_VERSION);
 
@@ -226,15 +260,17 @@ final class EPPDP_Plugin
         $js = <<<'JS'
         jQuery(function($){
 
+            // ---- Save list button (as you had) ----
             $(document).on('click','.eppdp-save-list',function(e){
                 e.preventDefault();
                 var $b=$(this).prop('disabled',true);
                 $.post(eppdpData.ajaxUrl,{action:'eppdp_save_list',nonce:eppdpData.nonce},function(res){
-                if(res.success){ alert('Saved to lists for this employee.'); }
-                else { alert(res.data||'Failed to save.'); }
+                    if(res.success){ alert('Saved to lists for this employee.'); }
+                    else { alert(res.data||'Failed to save.'); }
                 }).always(function(){ $b.prop('disabled',false); });
             });
 
+            // ---- Clear selection (as you had) ----
             $(document).on('click', '.eppdp-clear-selection', function(e) {
                 e.preventDefault();
                 var $b = $(this).prop('disabled', true);
@@ -243,6 +279,7 @@ final class EPPDP_Plugin
                     nonce: eppdpData.nonce
                 }, function(res) {
                     if (res.success) {
+                        // Ensure modal shows and cart is gated
                         $('#eppdp-modal').show();
                         $('.eppdp-banner').remove();
                     } else {
@@ -252,9 +289,50 @@ final class EPPDP_Plugin
                     $b.prop('disabled', false);
                 });
             });
-        
+
+            // ==========================================================
+            //  GATE: if no employee is selected, show modal and block add-to-cart
+            // ==========================================================
+            function ensureModalGate(){
+                if (!eppdpData || eppdpData.hasEmployee) return;
+
+                // Show the modal immediately
+                var $modal = $('#eppdp-modal');
+                if ($modal.length) {
+                    $modal.show();
+
+                    // If Select2 exists, try to focus the selector
+                    setTimeout(function(){
+                        var $sel = $('#eppdp-employee-select');
+                        if ($sel.length) {
+                            if ($.fn.select2 && !$sel.hasClass('select2-hidden-accessible')) {
+                                try { $sel.select2('open'); } catch(e){}
+                            } else {
+                                $sel.trigger('focus');
+                            }
+                        }
+                    }, 0);
+                }
+
+                // Intercept catalog "Add to cart" buttons
+                $(document).on('click.eppdpGate', '.add_to_cart_button', function(e){
+                    e.preventDefault();
+                    $('#eppdp-modal').show();
+                    return false;
+                });
+
+                // Intercept single product form submit
+                $(document).on('submit.eppdpGate', 'form.cart', function(e){
+                    e.preventDefault();
+                    $('#eppdp-modal').show();
+                    return false;
+                });
+            }
+
+            ensureModalGate();
         });
         JS;
+
 
         wp_add_inline_script('eppdp-modal', $js);
     }
@@ -263,11 +341,12 @@ final class EPPDP_Plugin
     public function render_modal()
     {
         if (
-            !(is_shop() || is_post_type_archive('product') || is_product_taxonomy())
+            !( is_shop() || is_product() || is_post_type_archive('product') || is_product_taxonomy() )
             || !is_user_logged_in()
         ) {
             return;
         }
+
         $employees = $this->get_employees_for_user(get_current_user_id());
         $counts = $this->get_employee_item_counts_persisted();
         $has = $this->has_selection();
@@ -525,6 +604,14 @@ final class EPPDP_Plugin
                                 $(document.body).trigger('update_checkout');
                             }
 
+                            // Bust Woo fragments in case the theme/side-cart reads from storage first
+                            try {
+                                sessionStorage.removeItem('wc_fragments');
+                                sessionStorage.removeItem('wc_cart_hash');
+                                localStorage.removeItem('wc_fragments');
+                                localStorage.removeItem('wc_cart_hash');
+                            } catch (e) {}
+
                             location.reload();
                         } else {
                             alert(res.data || 'Error saving selection.');
@@ -584,11 +671,21 @@ final class EPPDP_Plugin
     public function ajax_clear_selection()
     {
         check_ajax_referer('eppdp_nonce', 'nonce');
-        WC()->session->__unset('eppdp_employee_id');
-        WC()->session->__unset('eppdp_employee_name');
-        WC()->session->__unset('eppdp_po');
+
+        if (WC()->session) {
+            WC()->session->__unset('eppdp_employee_id');
+            WC()->session->__unset('eppdp_employee_name');
+            WC()->session->__unset('eppdp_po');
+        }
+
+        // Canonical helper (drops cookie + canonical store)
+        if (function_exists('eppdp_clear_selected_employee_id')) {
+            eppdp_clear_selected_employee_id();
+        }
+
         wp_send_json_success();
     }
+
 
 
     /* ---------- Cart control & stamping ---------- */
@@ -800,29 +897,27 @@ final class EPPDP_Plugin
             return $this->ajax_noauth();
         }
 
-        // 1) Capture old selection & its cart
-        $old_emp_id = WC()->session->get('eppdp_employee_id');
-        $all_by_emp = WC()->session->get('eppdp_cart_by_employee', []);
-
-        if ($old_emp_id) {
-            // grab *all* current cart line items
-            $all_by_emp[$old_emp_id] = WC()->cart->get_cart();
-            // store back to session
-            WC()->session->set('eppdp_cart_by_employee', $all_by_emp);
+        // Ensure Woo session/cart works in admin-ajax
+        if (function_exists('wc_load_cart')) {
+            wc_load_cart();
         }
 
-        // 2) Process new selection
+        // Snapshot the current employee’s live cart (so nothing is lost)
+        if (function_exists('eppdp_save_current_employee_cart')) {
+            eppdp_save_current_employee_cart();
+        }
+
         $user_id = get_current_user_id();
         $new_emp = sanitize_text_field($_POST['employee'] ?? '');
-        $po = sanitize_text_field($_POST['po'] ?? '');
+        $po      = sanitize_text_field($_POST['po'] ?? '');
 
-        // validate employee
+        // Validate employee, get display name
         $valid = false;
         $emp_name = '';
         foreach ($this->get_employees_for_user($user_id) as $emp) {
-            if ($emp['id'] === $new_emp) {
+            if ((string) $emp['id'] === $new_emp) {
                 $valid = true;
-                $emp_name = $emp['name'];
+                $emp_name = (string) $emp['name'];
                 break;
             }
         }
@@ -830,26 +925,43 @@ final class EPPDP_Plugin
             wp_send_json_error('Invalid employee.', 400);
         }
 
-        $this->set_selection($new_emp, $emp_name, $po);
+        // Canonical selection (helper sets cookie + canonical session)
+        if (function_exists('eppdp_set_selected_employee_id')) {
+            eppdp_set_selected_employee_id($new_emp);
+        }
 
-        WC()->cart->empty_cart();
-        $all_by_emp = WC()->session->get('eppdp_cart_by_employee', []);
-        if (!empty($all_by_emp[$new_emp]) && is_array($all_by_emp[$new_emp])) {
-            foreach ($all_by_emp[$new_emp] as $item_key => $ci) {
-                
-                $cart_item_data = array_filter([
-                    'eppdp_employee_id' => $ci['eppdp_employee_id'] ?? $new_emp,
-                    'eppdp_employee_name' => $ci['eppdp_employee_name'] ?? $emp_name,
-                    'eppdp_po' => $ci['eppdp_po'] ?? $po,
-                ]);
-                WC()->cart->add_to_cart(
-                    $ci['product_id'],
-                    $ci['quantity'],
-                    $ci['variation_id'],
-                    [],
-                    $cart_item_data
-                );
+        // Keep our plugin’s Woo session mirror in sync
+        $this->set_selection($new_emp, $emp_name, $po);
+        WC()->session->set('eppdp_po', $po);
+
+        // Make sure Woo writes the session cookie on this AJAX request
+        if (method_exists(WC()->session, 'set_customer_session_cookie')) {
+            WC()->session->set_customer_session_cookie(true);
+        }
+
+        // If the target employee has NO saved snapshot, force-clear the live cart now,
+        // so we don't carry over the previous employee's items.
+        $target_has_snapshot = false;
+        if (function_exists('eppdp_get_all_saved_carts') && is_user_logged_in()) {
+            $data = eppdp_prune_expired_carts(eppdp_get_all_saved_carts(get_current_user_id()));
+            $target_has_snapshot = !empty($data['carts'][$new_emp]);
+        }
+
+        if (WC()->cart && !$target_has_snapshot) {
+            if (function_exists('eppdp_suspend_save')) {
+                eppdp_suspend_save(true);
             }
+            WC()->cart->empty_cart();
+            WC()->cart->calculate_totals();
+            if (function_exists('eppdp_suspend_save')) {
+                eppdp_suspend_save(false);
+            }
+        }
+
+
+        // Immediately hydrate the cart from the saved snapshot for THIS employee
+        if (function_exists('eppdp_maybe_restore_employee_cart')) {
+            eppdp_maybe_restore_employee_cart();
         }
 
         wp_send_json_success(['employee' => $new_emp, 'po' => $po]);
@@ -946,17 +1058,17 @@ final class EPPDP_Plugin
     }
 
     /* ---------- Order item meta ---------- */
-    public function order_item_meta($item, $cart_item_key, $values, $order)
-    {
-        if (!empty($values['eppdp_employee_name'])) {
-            // $item->add_meta_data(__('Employee', 'eppdp'), $values['eppdp_employee_name'] . ' (' . $values['eppdp_employee_id'] . ')', true);
-            $item->add_meta_data(__('Employee', 'eppdp'), $values['eppdp_employee_name'], true);
-        }
-        // TODO:REMOVE this whole PO block:
-        // if (!empty($values['eppdp_po'])) {
-        //     $item->add_meta_data(__('PO', 'eppdp'), $values['eppdp_po'], true);
-        // }
-    }
+    // public function order_item_meta($item, $cart_item_key, $values, $order)
+    // {
+    //     if (!empty($values['eppdp_employee_name'])) {
+    //         // $item->add_meta_data(__('Employee', 'eppdp'), $values['eppdp_employee_name'] . ' (' . $values['eppdp_employee_id'] . ')', true);
+    //         $item->add_meta_data(__('Employee', 'eppdp'), $values['eppdp_employee_name'], true);
+    //     }
+    //     // TODO:REMOVE this whole PO block:
+    //     // if (!empty($values['eppdp_po'])) {
+    //     //     $item->add_meta_data(__('PO', 'eppdp'), $values['eppdp_po'], true);
+    //     // }
+    // }
 
     public function force_checkout_values($value, $key)
     {
@@ -1135,6 +1247,7 @@ add_action('woocommerce_after_checkout_validation', function ($data, $errors) {
         }
     }
 }, 10, 2);
+
 
 // Load employees data helpers early (filter + helper)
 require_once EPPDP_PATH . 'includes/employees-data.php';
